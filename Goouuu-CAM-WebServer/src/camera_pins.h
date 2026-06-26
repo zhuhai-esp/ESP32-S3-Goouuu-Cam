@@ -1,273 +1,31 @@
+/**
+ * @file camera_pins.h
+ * @brief ESP32-S3 与 GC2145 摄像头模组的 GPIO 引脚定义
+ * 
+ * 本文件定义了 Goouuu-CAM 开发板上摄像头模组的所有硬件连接引脚。
+ * 适用于 ESP32-S3 + GC2145 摄像头模组的引脚映射。
+ */
 
-#if defined(CAMERA_MODEL_WROVER_KIT)
-#define PWDN_GPIO_NUM    -1
-#define RESET_GPIO_NUM   -1
-#define XCLK_GPIO_NUM    21
-#define SIOD_GPIO_NUM    26
-#define SIOC_GPIO_NUM    27
+// 摄像头电源控制引脚（未使用，设为 -1）
+#define PWDN_GPIO_NUM -1   // 摄像头电源关闭控制（低电平有效）
+#define RESET_GPIO_NUM -1  // 摄像头复位控制（低电平有效）
 
-#define Y9_GPIO_NUM      35
-#define Y8_GPIO_NUM      34
-#define Y7_GPIO_NUM      39
-#define Y6_GPIO_NUM      36
-#define Y5_GPIO_NUM      19
-#define Y4_GPIO_NUM      18
-#define Y3_GPIO_NUM       5
-#define Y2_GPIO_NUM       4
-#define VSYNC_GPIO_NUM   25
-#define HREF_GPIO_NUM    23
-#define PCLK_GPIO_NUM    22
+// 摄像头时钟和控制引脚
+#define XCLK_GPIO_NUM 15   // 摄像头外部时钟输入（14MHz）
+#define SIOD_GPIO_NUM 4    // SCCB 数据线（I2C SDA）
+#define SIOC_GPIO_NUM 5    // SCCB 时钟线（I2C SCL）
 
-#elif defined(CAMERA_MODEL_ESP_EYE)
-#define PWDN_GPIO_NUM    -1
-#define RESET_GPIO_NUM   -1
-#define XCLK_GPIO_NUM    4
-#define SIOD_GPIO_NUM    18
-#define SIOC_GPIO_NUM    23
+// 摄像头 8 位并行数据总线（D0-D7）
+#define Y2_GPIO_NUM 11     // 数据位 D0
+#define Y3_GPIO_NUM 9      // 数据位 D1
+#define Y4_GPIO_NUM 8      // 数据位 D2
+#define Y5_GPIO_NUM 10     // 数据位 D3
+#define Y6_GPIO_NUM 12     // 数据位 D4
+#define Y7_GPIO_NUM 18     // 数据位 D5
+#define Y8_GPIO_NUM 17     // 数据位 D6
+#define Y9_GPIO_NUM 16     // 数据位 D7
 
-#define Y9_GPIO_NUM      36
-#define Y8_GPIO_NUM      37
-#define Y7_GPIO_NUM      38
-#define Y6_GPIO_NUM      39
-#define Y5_GPIO_NUM      35
-#define Y4_GPIO_NUM      14
-#define Y3_GPIO_NUM      13
-#define Y2_GPIO_NUM      34
-#define VSYNC_GPIO_NUM   5
-#define HREF_GPIO_NUM    27
-#define PCLK_GPIO_NUM    25
-
-#elif defined(CAMERA_MODEL_M5STACK_PSRAM)
-#define PWDN_GPIO_NUM     -1
-#define RESET_GPIO_NUM    15
-#define XCLK_GPIO_NUM     27
-#define SIOD_GPIO_NUM     25
-#define SIOC_GPIO_NUM     23
-
-#define Y9_GPIO_NUM       19
-#define Y8_GPIO_NUM       36
-#define Y7_GPIO_NUM       18
-#define Y6_GPIO_NUM       39
-#define Y5_GPIO_NUM        5
-#define Y4_GPIO_NUM       34
-#define Y3_GPIO_NUM       35
-#define Y2_GPIO_NUM       32
-#define VSYNC_GPIO_NUM    22
-#define HREF_GPIO_NUM     26
-#define PCLK_GPIO_NUM     21
-
-#elif defined(CAMERA_MODEL_M5STACK_V2_PSRAM)
-#define PWDN_GPIO_NUM     -1
-#define RESET_GPIO_NUM    15
-#define XCLK_GPIO_NUM     27
-#define SIOD_GPIO_NUM     22
-#define SIOC_GPIO_NUM     23
-
-#define Y9_GPIO_NUM       19
-#define Y8_GPIO_NUM       36
-#define Y7_GPIO_NUM       18
-#define Y6_GPIO_NUM       39
-#define Y5_GPIO_NUM        5
-#define Y4_GPIO_NUM       34
-#define Y3_GPIO_NUM       35
-#define Y2_GPIO_NUM       32
-#define VSYNC_GPIO_NUM    25
-#define HREF_GPIO_NUM     26
-#define PCLK_GPIO_NUM     21
-
-#elif defined(CAMERA_MODEL_M5STACK_WIDE)
-#define PWDN_GPIO_NUM     -1
-#define RESET_GPIO_NUM    15
-#define XCLK_GPIO_NUM     27
-#define SIOD_GPIO_NUM     22
-#define SIOC_GPIO_NUM     23
-
-#define Y9_GPIO_NUM       19
-#define Y8_GPIO_NUM       36
-#define Y7_GPIO_NUM       18
-#define Y6_GPIO_NUM       39
-#define Y5_GPIO_NUM        5
-#define Y4_GPIO_NUM       34
-#define Y3_GPIO_NUM       35
-#define Y2_GPIO_NUM       32
-#define VSYNC_GPIO_NUM    25
-#define HREF_GPIO_NUM     26
-#define PCLK_GPIO_NUM     21
-
-#elif defined(CAMERA_MODEL_M5STACK_ESP32CAM)
-#define PWDN_GPIO_NUM     -1
-#define RESET_GPIO_NUM    15
-#define XCLK_GPIO_NUM     27
-#define SIOD_GPIO_NUM     25
-#define SIOC_GPIO_NUM     23
-
-#define Y9_GPIO_NUM       19
-#define Y8_GPIO_NUM       36
-#define Y7_GPIO_NUM       18
-#define Y6_GPIO_NUM       39
-#define Y5_GPIO_NUM        5
-#define Y4_GPIO_NUM       34
-#define Y3_GPIO_NUM       35
-#define Y2_GPIO_NUM       17
-#define VSYNC_GPIO_NUM    22
-#define HREF_GPIO_NUM     26
-#define PCLK_GPIO_NUM     21
-
-#elif defined(CAMERA_MODEL_M5STACK_UNITCAM)
-#define PWDN_GPIO_NUM     -1
-#define RESET_GPIO_NUM    15
-#define XCLK_GPIO_NUM     27
-#define SIOD_GPIO_NUM     25
-#define SIOC_GPIO_NUM     23
-
-#define Y9_GPIO_NUM       19
-#define Y8_GPIO_NUM       36
-#define Y7_GPIO_NUM       18
-#define Y6_GPIO_NUM       39
-#define Y5_GPIO_NUM        5
-#define Y4_GPIO_NUM       34
-#define Y3_GPIO_NUM       35
-#define Y2_GPIO_NUM       32
-#define VSYNC_GPIO_NUM    22
-#define HREF_GPIO_NUM     26
-#define PCLK_GPIO_NUM     21
-
-#elif defined(CAMERA_MODEL_AI_THINKER)
-#define PWDN_GPIO_NUM     32
-#define RESET_GPIO_NUM    -1
-#define XCLK_GPIO_NUM      0
-#define SIOD_GPIO_NUM     26
-#define SIOC_GPIO_NUM     27
-
-#define Y9_GPIO_NUM       35
-#define Y8_GPIO_NUM       34
-#define Y7_GPIO_NUM       39
-#define Y6_GPIO_NUM       36
-#define Y5_GPIO_NUM       21
-#define Y4_GPIO_NUM       19
-#define Y3_GPIO_NUM       18
-#define Y2_GPIO_NUM        5
-#define VSYNC_GPIO_NUM    25
-#define HREF_GPIO_NUM     23
-#define PCLK_GPIO_NUM     22
-
-#elif defined(CAMERA_MODEL_TTGO_T_JOURNAL)
-#define PWDN_GPIO_NUM      0
-#define RESET_GPIO_NUM    15
-#define XCLK_GPIO_NUM     27
-#define SIOD_GPIO_NUM     25
-#define SIOC_GPIO_NUM     23
-
-#define Y9_GPIO_NUM       19
-#define Y8_GPIO_NUM       36
-#define Y7_GPIO_NUM       18
-#define Y6_GPIO_NUM       39
-#define Y5_GPIO_NUM        5
-#define Y4_GPIO_NUM       34
-#define Y3_GPIO_NUM       35
-#define Y2_GPIO_NUM       17
-#define VSYNC_GPIO_NUM    22
-#define HREF_GPIO_NUM     26
-#define PCLK_GPIO_NUM     21
-
-
-#elif defined(CAMERA_MODEL_ESP32_CAM_BOARD)
-// The 18 pin header on the board has Y5 and Y3 swapped
-#define USE_BOARD_HEADER 0 
-#define PWDN_GPIO_NUM    32
-#define RESET_GPIO_NUM   33
-#define XCLK_GPIO_NUM     4
-#define SIOD_GPIO_NUM    18
-#define SIOC_GPIO_NUM    23
-
-#define Y9_GPIO_NUM      36
-#define Y8_GPIO_NUM      19
-#define Y7_GPIO_NUM      21
-#define Y6_GPIO_NUM      39
-#if USE_BOARD_HEADER
-#define Y5_GPIO_NUM      13
-#else
-#define Y5_GPIO_NUM      35
-#endif
-#define Y4_GPIO_NUM      14
-#if USE_BOARD_HEADER
-#define Y3_GPIO_NUM      35
-#else
-#define Y3_GPIO_NUM      13
-#endif
-#define Y2_GPIO_NUM      34
-#define VSYNC_GPIO_NUM    5
-#define HREF_GPIO_NUM    27
-#define PCLK_GPIO_NUM    25
-
-#elif defined(CAMERA_MODEL_ESP32S3_CAM_LCD)
-#define PWDN_GPIO_NUM     -1
-#define RESET_GPIO_NUM    -1
-#define XCLK_GPIO_NUM     40
-#define SIOD_GPIO_NUM     17
-#define SIOC_GPIO_NUM     18
-
-#define Y9_GPIO_NUM       39
-#define Y8_GPIO_NUM       41
-#define Y7_GPIO_NUM       42
-#define Y6_GPIO_NUM       12
-#define Y5_GPIO_NUM       3
-#define Y4_GPIO_NUM       14
-#define Y3_GPIO_NUM       47
-#define Y2_GPIO_NUM       13
-#define VSYNC_GPIO_NUM    21
-#define HREF_GPIO_NUM     38
-#define PCLK_GPIO_NUM     11
-
-#elif defined(CAMERA_MODEL_ESP32S2_CAM_BOARD)
-// The 18 pin header on the board has Y5 and Y3 swapped
-#define USE_BOARD_HEADER 0
-#define PWDN_GPIO_NUM     1
-#define RESET_GPIO_NUM    2
-#define XCLK_GPIO_NUM     42
-#define SIOD_GPIO_NUM     41
-#define SIOC_GPIO_NUM     18
-
-#define Y9_GPIO_NUM       16
-#define Y8_GPIO_NUM       39
-#define Y7_GPIO_NUM       40
-#define Y6_GPIO_NUM       15
-#if USE_BOARD_HEADER
-#define Y5_GPIO_NUM       12
-#else
-#define Y5_GPIO_NUM       13
-#endif
-#define Y4_GPIO_NUM       5
-#if USE_BOARD_HEADER
-#define Y3_GPIO_NUM       13
-#else
-#define Y3_GPIO_NUM       12
-#endif
-#define Y2_GPIO_NUM       14
-#define VSYNC_GPIO_NUM    38
-#define HREF_GPIO_NUM     4
-#define PCLK_GPIO_NUM     3
-
-#elif defined(CAMERA_MODEL_ESP32S3_EYE)
-#define PWDN_GPIO_NUM -1
-#define RESET_GPIO_NUM -1
-#define XCLK_GPIO_NUM 15
-#define SIOD_GPIO_NUM 4
-#define SIOC_GPIO_NUM 5
-
-#define Y2_GPIO_NUM 11
-#define Y3_GPIO_NUM 9
-#define Y4_GPIO_NUM 8
-#define Y5_GPIO_NUM 10
-#define Y6_GPIO_NUM 12
-#define Y7_GPIO_NUM 18
-#define Y8_GPIO_NUM 17
-#define Y9_GPIO_NUM 16
-
-#define VSYNC_GPIO_NUM 6
-#define HREF_GPIO_NUM 7
-#define PCLK_GPIO_NUM 13
-
-#else
-#error "Camera model not selected"
-#endif
+// 摄像头同步信号引脚
+#define VSYNC_GPIO_NUM 6   // 垂直同步信号（帧起始标志）
+#define HREF_GPIO_NUM 7    // 水平参考信号（行有效标志）
+#define PCLK_GPIO_NUM 13   // 像素时钟（数据采样时钟）

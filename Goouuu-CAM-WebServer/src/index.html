@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32-S3 摄像头控制面板</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: { extend: { animation: { 'spin-slow': 'spin 1s linear infinite' } } }
+        }
+    </script>
+    <style>
+        .toggle-track {
+            position: relative; width: 44px; height: 24px;
+            background: #cbd5e1; border-radius: 12px; cursor: pointer;
+            transition: background 0.3s; flex-shrink: 0;
+        }
+        .toggle-track.active { background: #6366f1; }
+        .toggle-thumb {
+            position: absolute; top: 2px; left: 2px;
+            width: 20px; height: 20px; background: white;
+            border-radius: 50%; transition: transform 0.3s;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+        }
+        .toggle-track.active .toggle-thumb { transform: translateX(20px); }
+        .signal-bar { transition: background 0.3s; }
+        .ws-dot { transition: background 0.3s, box-shadow 0.3s; }
+        .toast {
+            position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+            background: #10b981; color: white; padding: 8px 20px; border-radius: 8px;
+            font-size: 13px; font-weight: 600; z-index: 100;
+            opacity: 0; transition: opacity 0.3s; pointer-events: none;
+        }
+        .toast.show { opacity: 1; }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-indigo-500 to-purple-600 min-h-screen p-3 md:p-6">
+    <div class="max-w-6xl mx-auto bg-white/95 rounded-2xl shadow-2xl overflow-hidden">
+
+        <!-- Header -->
+        <div class="bg-gradient-to-r from-sky-400 to-cyan-300 text-white py-4 px-4 md:py-5 md:px-6 text-center">
+            <h1 class="text-xl md:text-3xl font-bold">ESP32-S3 摄像头控制面板</h1>
+            <p class="text-xs md:text-sm opacity-90 mt-1">实时画面 &amp; WebSocket 控制</p>
+        </div>
+
+        <!-- Main Content -->
+        <div class="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-4 p-4 md:gap-5 md:p-5">
+
+            <!-- Left: Video Section -->
+            <div class="bg-gray-900 rounded-xl p-3 md:p-4 flex flex-col">
+                <div class="relative w-full aspect-video bg-black rounded-lg overflow-hidden max-h-[60vh] lg:max-h-[70vh]">
+                    <div id="loading" class="absolute inset-0 flex items-center justify-center text-white text-lg">
+                        连接中...
+                        <span class="ml-2 w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin-slow inline-block"></span>
+                    </div>
+                    <img id="stream" src="" alt="Camera Stream" class="absolute inset-0 w-full h-full object-contain hidden">
+                </div>
+
+                <div class="flex flex-wrap justify-center gap-2 md:gap-3 mt-3 md:mt-4">
+                    <button onclick="startStream()" class="flex items-center gap-2 px-3 py-2 md:px-4 md:py-2.5 bg-indigo-500 hover:bg-indigo-600 text-white text-sm font-semibold rounded-lg transition-all hover:-translate-y-0.5 active:translate-y-0">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                        开始
+                    </button>
+                    <button onclick="stopStream()" class="flex items-center gap-2 px-3 py-2 md:px-4 md:py-2.5 bg-rose-500 hover:bg-rose-600 text-white text-sm font-semibold rounded-lg transition-all hover:-translate-y-0.5 active:translate-y-0">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z"/></svg>
+                        停止
+                    </button>
+                    <button onclick="captureImage()" class="flex items-center gap-2 px-3 py-2 md:px-4 md:py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold rounded-lg transition-all hover:-translate-y-0.5 active:translate-y-0">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/><circle cx="12" cy="13" r="3"/></svg>
+                        截图
+                    </button>
+                </div>
+
+                <div class="bg-gray-800 text-emerald-400 px-3 py-2 md:px-4 rounded-lg mt-2 md:mt-3 font-mono text-xs flex items-center justify-between">
+                    <span class="flex items-center gap-2">
+                        <span id="connStatus" class="ws-dot w-2.5 h-2.5 rounded-full bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]"></span>
+                        <span id="statusText">未连接</span>
+                    </span>
+                    <span id="fpsDisplay">FPS: --</span>
+                </div>
+            </div>
+
+            <!-- Right: Controls -->
+            <div class="flex flex-col gap-3 md:gap-4">
+
+                <!-- Image Settings -->
+                <div class="bg-gray-50 rounded-xl p-3 md:p-4 border border-gray-200">
+                    <h3 class="text-sm font-bold text-gray-700 pb-2 mb-3 border-b-2 border-indigo-500">图像设置</h3>
+
+                    <label class="block text-xs text-gray-500 font-medium mb-1">像素格式</label>
+                    <select id="pixformat" onchange="wsSet('pixformat', this.value)"
+                        class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:border-indigo-500 mb-3">
+                        <option value="0" selected>RGB565</option>
+                        <option value="1">YUV422</option>
+                        <option value="2">YUV420</option>
+                        <option value="3">灰度</option>
+                        <option value="4">JPEG</option>
+                        <option value="5">RGB888</option>
+                        <option value="6">Raw</option>
+                    </select>
+
+                    <label class="block text-xs text-gray-500 font-medium mb-1">分辨率</label>
+                    <select id="framesize" onchange="wsSet('framesize', this.value)"
+                        class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:border-indigo-500 mb-3">
+                        <option value="0">96x96</option>
+                        <option value="1">160x120 (QQVGA)</option>
+                        <option value="2">176x144 (QCIF)</option>
+                        <option value="3">240x176 (HQVGA)</option>
+                        <option value="4">240x240</option>
+                        <option value="5" selected>320x240 (QVGA)</option>
+                        <option value="6">400x296 (CIF)</option>
+                        <option value="7">480x320 (HVGA)</option>
+                        <option value="8">640x480 (VGA)</option>
+                        <option value="9">800x600 (SVGA)</option>
+                        <option value="10">1024x768 (XGA)</option>
+                        <option value="11">1280x720 (HD)</option>
+                        <option value="12">1280x1024 (SXGA)</option>
+                        <option value="13">1600x1200 (UXGA)</option>
+                    </select>
+
+                    <div id="sliders">
+                        <div class="mb-3">
+                            <div class="flex justify-between text-xs text-gray-500 font-medium mb-1">
+                                <span>质量</span>
+                                <span class="text-indigo-600 font-bold" id="qualityValue">10</span>
+                            </div>
+                            <input type="range" id="quality" min="4" max="63" value="10"
+                                oninput="document.getElementById('qualityValue').textContent=this.value"
+                                onchange="wsSet('quality', this.value)"
+                                class="w-full h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer accent-indigo-500">
+                        </div>
+                        <div class="mb-3">
+                            <div class="flex justify-between text-xs text-gray-500 font-medium mb-1">
+                                <span>亮度</span>
+                                <span class="text-indigo-600 font-bold" id="brightnessValue">0</span>
+                            </div>
+                            <input type="range" id="brightness" min="-2" max="2" value="0"
+                                oninput="document.getElementById('brightnessValue').textContent=this.value"
+                                onchange="wsSet('brightness', this.value)"
+                                class="w-full h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer accent-indigo-500">
+                        </div>
+                        <div class="mb-3">
+                            <div class="flex justify-between text-xs text-gray-500 font-medium mb-1">
+                                <span>对比度</span>
+                                <span class="text-indigo-600 font-bold" id="contrastValue">0</span>
+                            </div>
+                            <input type="range" id="contrast" min="-2" max="2" value="0"
+                                oninput="document.getElementById('contrastValue').textContent=this.value"
+                                onchange="wsSet('contrast', this.value)"
+                                class="w-full h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer accent-indigo-500">
+                        </div>
+                        <div>
+                            <div class="flex justify-between text-xs text-gray-500 font-medium mb-1">
+                                <span>饱和度</span>
+                                <span class="text-indigo-600 font-bold" id="saturationValue">0</span>
+                            </div>
+                            <input type="range" id="saturation" min="-2" max="2" value="0"
+                                oninput="document.getElementById('saturationValue').textContent=this.value"
+                                onchange="wsSet('saturation', this.value)"
+                                class="w-full h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer accent-indigo-500">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Advanced Settings -->
+                <div class="bg-gray-50 rounded-xl p-3 md:p-4 border border-gray-200">
+                    <h3 class="text-sm font-bold text-gray-700 pb-2 mb-3 border-b-2 border-indigo-500">高级设置</h3>
+
+                    <label class="block text-xs text-gray-500 font-medium mb-1">白平衡</label>
+                    <select id="wb_mode" onchange="wsSet('wb_mode', this.value)"
+                        class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300 mb-3">
+                        <option value="0">自动</option>
+                        <option value="1">晴天</option>
+                        <option value="2">阴天</option>
+                        <option value="3">办公室</option>
+                        <option value="4">室内</option>
+                    </select>
+
+                    <label class="block text-xs text-gray-500 font-medium mb-1">特殊效果</label>
+                    <select id="special_effect" onchange="wsSet('special_effect', this.value)"
+                        class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300 mb-3">
+                        <option value="0">无</option>
+                        <option value="1">负片</option>
+                        <option value="2">灰度</option>
+                        <option value="3">红色调</option>
+                        <option value="4">绿色调</option>
+                        <option value="5">蓝色调</option>
+                        <option value="6">复古</option>
+                    </select>
+
+                    <div class="space-y-2">
+                        <div class="flex items-center justify-between">
+                            <span class="text-sm text-gray-600">水平镜像</span>
+                            <div class="toggle-track" id="hmirror_toggle" onclick="toggleSwitch(this, 'hmirror')">
+                                <div class="toggle-thumb"></div>
+                            </div>
+                        </div>
+                        <div class="flex items-center justify-between">
+                            <span class="text-sm text-gray-600">垂直翻转</span>
+                            <div class="toggle-track active" id="vflip_toggle" onclick="toggleSwitch(this, 'vflip')">
+                                <div class="toggle-thumb"></div>
+                            </div>
+                        </div>
+                        <div class="flex items-center justify-between">
+                            <span class="text-sm text-gray-600">自动曝光</span>
+                            <div class="toggle-track active" id="aec_toggle" onclick="toggleSwitch(this, 'aec')">
+                                <div class="toggle-thumb"></div>
+                            </div>
+                        </div>
+                        <div class="flex items-center justify-between">
+                            <span class="text-sm text-gray-600">自动增益</span>
+                            <div class="toggle-track active" id="agc_toggle" onclick="toggleSwitch(this, 'agc')">
+                                <div class="toggle-thumb"></div>
+                            </div>
+                        </div>
+                        <div class="flex items-center justify-between">
+                            <span class="text-sm text-gray-600">自动白平衡</span>
+                            <div class="toggle-track active" id="awb_toggle" onclick="toggleSwitch(this, 'awb')">
+                                <div class="toggle-thumb"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Device Info -->
+                <div class="bg-gray-50 rounded-xl p-3 md:p-4 border border-gray-200">
+                    <div class="flex items-center justify-between pb-2 mb-3 border-b-2 border-sky-400">
+                        <h3 class="text-sm font-bold text-gray-700">设备信息</h3>
+                        <button onclick="refreshSystemInfo()" class="p-1 text-gray-400 hover:text-sky-500 transition-colors" title="刷新系统信息">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="grid grid-cols-2 gap-1.5 md:gap-2">
+                        <div class="bg-white p-2 md:p-2.5 rounded-lg border border-gray-100">
+                            <span class="block text-[10px] text-gray-400">传感器</span>
+                            <span class="block text-xs md:text-sm font-semibold text-gray-700" id="sensorType">--</span>
+                        </div>
+                        <div class="bg-white p-2 md:p-2.5 rounded-lg border border-gray-100">
+                            <span class="block text-[10px] text-gray-400">XCLK</span>
+                            <span class="block text-xs md:text-sm font-semibold text-gray-700" id="xclkFreq">--</span>
+                        </div>
+                        <div class="bg-white p-2 md:p-2.5 rounded-lg border border-gray-100">
+                            <span class="block text-[10px] text-gray-400">像素格式</span>
+                            <span class="block text-xs md:text-sm font-semibold text-gray-700" id="pixFormat">--</span>
+                        </div>
+                        <div class="bg-white p-2 md:p-2.5 rounded-lg border border-gray-100">
+                            <span class="block text-[10px] text-gray-400">帧大小</span>
+                            <span class="block text-xs md:text-sm font-semibold text-gray-700" id="frameSize">--</span>
+                        </div>
+                    </div>
+
+                    <!-- System Info -->
+                    <div class="mt-3 grid grid-cols-2 gap-1.5 md:gap-2">
+                        <div class="bg-white p-2 md:p-2.5 rounded-lg border border-gray-100">
+                            <span class="block text-[10px] text-gray-400">可用堆内存</span>
+                            <span class="block text-xs md:text-sm font-semibold text-gray-700" id="freeHeap">--</span>
+                            <div class="mt-1 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                                <div id="heapBar" class="h-full bg-sky-500 rounded-full transition-all" style="width: 0%"></div>
+                            </div>
+                        </div>
+                        <div class="bg-white p-2 md:p-2.5 rounded-lg border border-gray-100">
+                            <span class="block text-[10px] text-gray-400">可用 PSRAM</span>
+                            <span class="block text-xs md:text-sm font-semibold text-gray-700" id="freePsram">--</span>
+                            <div class="mt-1 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                                <div id="psramBar" class="h-full bg-emerald-500 rounded-full transition-all" style="width: 0%"></div>
+                            </div>
+                        </div>
+                        <div class="bg-white p-2 md:p-2.5 rounded-lg border border-gray-100">
+                            <span class="block text-[10px] text-gray-400">固件大小</span>
+                            <span class="block text-xs md:text-sm font-semibold text-gray-700" id="sketchUsed">--</span>
+                        </div>
+                        <div class="bg-white p-2 md:p-2.5 rounded-lg border border-gray-100">
+                            <span class="block text-[10px] text-gray-400">运行时长</span>
+                            <span class="block text-xs md:text-sm font-semibold text-gray-700" id="uptime">--</span>
+                        </div>
+                    </div>
+
+                    <!-- WiFi Info -->
+                    <div class="mt-3 grid grid-cols-2 gap-1.5 md:gap-2">
+                        <div class="bg-white p-2 md:p-2.5 rounded-lg border border-gray-100">
+                            <span class="block text-[10px] text-gray-400">WiFi 名称</span>
+                            <span class="block text-xs md:text-sm font-semibold text-gray-700 truncate" id="wifiSsid">--</span>
+                        </div>
+                        <div class="bg-white p-2 md:p-2.5 rounded-lg border border-gray-100">
+                            <span class="block text-[10px] text-gray-400">IP 地址</span>
+                            <span class="block text-xs md:text-sm font-semibold text-gray-700" id="wifiIp">--</span>
+                        </div>
+                        <div class="bg-white p-2 md:p-2.5 rounded-lg border border-gray-100 col-span-2">
+                            <span class="block text-[10px] text-gray-400 mb-1">信号强度</span>
+                            <div class="flex items-center gap-2">
+                                <div class="flex items-end gap-0.5 h-4">
+                                    <div class="w-1.5 bg-gray-300 rounded-sm signal-bar" id="sig1" style="height:4px"></div>
+                                    <div class="w-1.5 bg-gray-300 rounded-sm signal-bar" id="sig2" style="height:8px"></div>
+                                    <div class="w-1.5 bg-gray-300 rounded-sm signal-bar" id="sig3" style="height:12px"></div>
+                                    <div class="w-1.5 bg-gray-300 rounded-sm signal-bar" id="sig4" style="height:16px"></div>
+                                </div>
+                                <span class="text-xs text-gray-500 font-mono" id="wifiRssi">-- dBm</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Actions -->
+                <div class="bg-gray-50 rounded-xl p-3 md:p-4 border border-gray-200">
+                    <h3 class="text-sm font-bold text-gray-700 pb-2 mb-3 border-b-2 border-rose-400">操作</h3>
+                    <div class="flex gap-2">
+                        <button onclick="refreshStatus()" class="flex-1 px-3 py-2 text-xs font-semibold text-sky-700 bg-sky-100 hover:bg-sky-200 rounded-lg transition-colors">
+                            刷新状态
+                        </button>
+                        <button onclick="resetDefaults()" class="flex-1 px-3 py-2 text-xs font-semibold text-amber-700 bg-amber-100 hover:bg-amber-200 rounded-lg transition-colors">
+                            恢复默认
+                        </button>
+                        <button onclick="rebootDevice()" class="flex-1 px-3 py-2 text-xs font-semibold text-red-700 bg-red-100 hover:bg-red-200 rounded-lg transition-colors">
+                            重启设备
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Keyboard Shortcuts (hidden on mobile) -->
+                <div class="hidden md:block bg-gray-50 rounded-xl p-3 border border-gray-200">
+                    <h3 class="text-xs font-bold text-gray-500 pb-1 mb-2 border-b border-gray-200">键盘快捷键</h3>
+                    <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] text-gray-400">
+                        <span><kbd class="px-1 py-0.5 bg-gray-200 rounded text-gray-600 font-mono">S</kbd> 开始画面</span>
+                        <span><kbd class="px-1 py-0.5 bg-gray-200 rounded text-gray-600 font-mono">X</kbd> 停止画面</span>
+                        <span><kbd class="px-1 py-0.5 bg-gray-200 rounded text-gray-600 font-mono">C</kbd> 截图</span>
+                        <span><kbd class="px-1 py-0.5 bg-gray-200 rounded text-gray-600 font-mono">Esc</kbd> 关闭预览</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="bg-gray-800 text-white text-center py-2 md:py-3 text-[10px] md:text-xs">
+            ESP32-S3 摄像头网络控制面板 v1.3 | WebSocket 实时
+        </div>
+    </div>
+
+    <!-- Toast notification -->
+    <div id="toast" class="toast">已保存</div>
+
+    <!-- Capture Preview Modal -->
+    <div id="capturePreview" class="fixed bottom-4 right-4 md:bottom-6 md:right-6 w-[320px] md:w-[400px] bg-white rounded-xl shadow-2xl border border-gray-200 overflow-hidden hidden z-50">
+        <div class="flex items-center justify-between px-3 py-2 bg-gray-800 text-white text-xs font-semibold">
+            <span>截图预览</span>
+            <button onclick="closePreview()" class="w-6 h-6 flex items-center justify-center rounded hover:bg-white/20 transition-colors">&times;</button>
+        </div>
+        <div class="p-2 bg-gray-100">
+            <img id="previewImage" src="" alt="Preview" class="w-full rounded">
+        </div>
+        <div class="px-3 py-2 bg-gray-50 border-t border-gray-200 flex justify-end gap-2">
+            <button onclick="closePreview()" class="px-3 py-1 text-xs text-gray-600 hover:text-gray-800 transition-colors">关闭</button>
+            <button onclick="downloadCapture()" class="px-3 py-1 text-xs bg-indigo-500 hover:bg-indigo-600 text-white rounded transition-colors">保存</button>
+        </div>
+    </div>
+
+    <script>
+        // ── State ─────────────────────────────────────────────────────────
+        let ws = null;
+        let streaming = false;
+        let fpsCounter = 0;
+        let lastFpsTime = Date.now();
+        let reconnectTimer = null;
+        let dirtyControls = new Set();  // 用户修改过的控件ID，状态更新时跳过
+
+        // ── WebSocket ─────────────────────────────────────────────────────
+        function wsConnect() {
+            const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const url = proto + '//' + location.host + '/ws';
+            ws = new WebSocket(url);
+
+            ws.onopen = () => {
+                updateWsStatus(true);
+                dirtyControls.clear();  // 重连时清除所有脏标记，获取最新状态
+                // Request initial data
+                wsSend({cmd: 'get_status'});
+                wsSend({cmd: 'get_wifi'});
+                wsSend({cmd: 'get_system'});
+            };
+
+            ws.onmessage = (e) => {
+                try {
+                    const msg = JSON.parse(e.data);
+                    handleWsMessage(msg);
+                } catch(err) {
+                    console.error('WS parse error:', err);
+                }
+            };
+
+            ws.onclose = () => {
+                updateWsStatus(false);
+                scheduleReconnect();
+            };
+
+            ws.onerror = () => {
+                ws.close();
+            };
+        }
+
+        function wsSend(obj) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify(obj));
+            }
+        }
+
+        function wsSet(varName, val) {
+            // 标记该控件为"脏"，防止状态更新覆盖
+            dirtyControls.add(varName);
+            const msg = {cmd: 'set', var: varName, val: parseInt(val)};
+            console.log('[wsSet] 发送:', JSON.stringify(msg), 'dirty:', [...dirtyControls]);
+            wsSend(msg);
+        }
+
+        function scheduleReconnect() {
+            if (reconnectTimer) return;
+            reconnectTimer = setTimeout(() => {
+                reconnectTimer = null;
+                wsConnect();
+            }, 3000);
+        }
+
+        function updateWsStatus(connected) {
+            const dot = document.getElementById('connStatus');
+            const txt = document.getElementById('statusText');
+            if (connected) {
+                dot.className = 'ws-dot w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.6)]';
+                txt.textContent = '已连接';
+            } else {
+                dot.className = 'ws-dot w-2.5 h-2.5 rounded-full bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]';
+                txt.textContent = '未连接';
+            }
+        }
+
+        // ── Message Handler ───────────────────────────────────────────────
+        function handleWsMessage(msg) {
+            switch (msg.type) {
+                case 'status':
+                    updateDeviceInfo(msg.data);
+                    break;
+                case 'wifi':
+                    updateWifiInfo(msg);
+                    break;
+                case 'system':
+                    updateSystemInfo(msg);
+                    break;
+                case 'update':
+                    // 定时推送 - 跳过用户已修改的控件
+                    if (msg.status) updateDeviceInfo(msg.status);
+                    if (msg.wifi) updateWifiInfo(msg.wifi);
+                    break;
+                case 'ack':
+                    if (msg.ok) {
+                        showToast('已保存: ' + (msg.var || ''));
+                    } else {
+                        showToast('设置失败: ' + (msg.var || ''), true);
+                    }
+                    // 无论成功失败都保持脏标记，防止状态更新覆盖用户选择的值
+                    // 用户可通过"刷新状态"按钮主动获取传感器实际值
+                    break;
+                case 'restarting':
+                    updateWsStatus(false);
+                    document.getElementById('statusText').textContent = '重启中...';
+                    dirtyControls.clear();
+                    setTimeout(() => wsConnect(), 8000);
+                    break;
+            }
+        }
+
+        // ── Device Info Update ────────────────────────────────────────────
+        function updateDeviceInfo(d) {
+            document.getElementById('sensorType').textContent = sensorName(d.PID);
+            document.getElementById('xclkFreq').textContent = d.xclk + ' MHz';
+            document.getElementById('pixFormat').textContent = pixFmt(d.pixformat);
+            document.getElementById('frameSize').textContent = frameSz(d.framesize);
+
+            // 只更新未被用户修改的控件
+            if (!dirtyControls.has('quality')) {
+                document.getElementById('quality').value = d.quality;
+                document.getElementById('qualityValue').textContent = d.quality;
+            }
+            if (!dirtyControls.has('brightness')) {
+                document.getElementById('brightness').value = d.brightness;
+                document.getElementById('brightnessValue').textContent = d.brightness;
+            }
+            if (!dirtyControls.has('contrast')) {
+                document.getElementById('contrast').value = d.contrast;
+                document.getElementById('contrastValue').textContent = d.contrast;
+            }
+            if (!dirtyControls.has('saturation')) {
+                document.getElementById('saturation').value = d.saturation;
+                document.getElementById('saturationValue').textContent = d.saturation;
+            }
+
+            if (!dirtyControls.has('pixformat')) document.getElementById('pixformat').value = d.pixformat;
+            if (!dirtyControls.has('framesize')) document.getElementById('framesize').value = d.framesize;
+            if (!dirtyControls.has('wb_mode')) document.getElementById('wb_mode').value = d.wb_mode;
+            if (!dirtyControls.has('special_effect')) document.getElementById('special_effect').value = d.special_effect;
+
+            if (!dirtyControls.has('hmirror')) setToggle('hmirror', d.hmirror);
+            if (!dirtyControls.has('vflip')) setToggle('vflip', d.vflip);
+            if (!dirtyControls.has('aec')) setToggle('aec', d.aec);
+            if (!dirtyControls.has('agc')) setToggle('agc', d.agc);
+            if (!dirtyControls.has('awb')) setToggle('awb', d.awb);
+        }
+
+        function updateWifiInfo(d) {
+            document.getElementById('wifiSsid').textContent = d.ssid || '--';
+            document.getElementById('wifiIp').textContent = d.ip || '--';
+            document.getElementById('wifiRssi').textContent = d.rssi + ' dBm';
+            updateSignalBars(d.quality);
+        }
+
+        function updateSystemInfo(d) {
+            // 格式化内存大小
+            function formatBytes(bytes) {
+                if (bytes < 1024) return bytes + ' B';
+                if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+                return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+            }
+
+            document.getElementById('freeHeap').textContent = formatBytes(d.freeHeap) + ' / ' + formatBytes(d.totalHeap);
+            document.getElementById('heapBar').style.width = (100 - d.heapUsage) + '%';
+
+            document.getElementById('freePsram').textContent = formatBytes(d.freePsram) + ' / ' + formatBytes(d.totalPsram);
+            const psramUsage = d.totalPsram > 0 ? ((d.totalPsram - d.freePsram) * 100 / d.totalPsram) : 0;
+            document.getElementById('psramBar').style.width = (100 - psramUsage) + '%';
+
+            document.getElementById('sketchUsed').textContent = formatBytes(d.sketchUsed);
+            document.getElementById('uptime').textContent = d.uptime;
+        }
+
+        function refreshSystemInfo() {
+            wsSend({cmd: 'get_system'});
+        }
+
+        function refreshStatus() {
+            dirtyControls.clear();
+            wsSend({cmd: 'get_status'});
+            wsSend({cmd: 'get_system'});
+            showToast('已刷新状态');
+        }
+
+        function sensorName(pid) {
+            return {0x2640:'OV2640', 0x3660:'OV3660', 0x5640:'OV5640', 0x40DC:'GC2145', 0x2145:'GC2145'}[pid] || '0x'+pid.toString(16);
+        }
+        function pixFmt(f) {
+            return ['RGB565','YUV422','YUV420','灰度','JPEG','RGB888','Raw','RGB444','RGB555'][f] || '?';
+        }
+        function frameSz(s) {
+            return ['96x96','160x120','176x144','240x176','240x240','320x240','400x296','480x320','640x480','800x600','1024x768','1280x720','1280x1024','1600x1200'][s] || '?';
+        }
+
+        function updateSignalBars(quality) {
+            const bars = ['sig1', 'sig2', 'sig3', 'sig4'];
+            const thresholds = [25, 50, 75, 90];
+            bars.forEach((id, i) => {
+                const el = document.getElementById(id);
+                if (quality >= thresholds[i]) el.style.background = '#10b981';
+                else if (quality >= thresholds[i] - 15) el.style.background = '#f59e0b';
+                else el.style.background = '#d1d5db';
+            });
+        }
+
+        // ── Stream (unchanged - uses HTTP on port 81) ─────────────────────
+        let fpsTimer = null;
+        let frameCount = 0;
+        let lastFpsUpdate = performance.now();
+
+        function getMediaBaseUrl() {
+            return location.protocol + '//' + location.hostname + ':81';
+        }
+        function getStreamUrl() {
+            return getMediaBaseUrl() + '/stream';
+        }
+
+        function startStream() {
+            const img = document.getElementById('stream');
+            img.src = getStreamUrl();
+            img.classList.remove('hidden');
+            document.getElementById('loading').classList.add('hidden');
+            streaming = true;
+            frameCount = 0;
+            lastFpsUpdate = performance.now();
+
+            // 使用 load 事件计数帧（对于 MJPEG 流，每帧都会触发）
+            img.onload = () => {
+                frameCount++;
+            };
+
+            // 每秒更新 FPS 显示
+            fpsTimer = setInterval(() => {
+                const now = performance.now();
+                const elapsed = (now - lastFpsUpdate) / 1000;
+                const fps = Math.round(frameCount / elapsed);
+                document.getElementById('fpsDisplay').textContent = 'FPS: ' + fps;
+                frameCount = 0;
+                lastFpsUpdate = now;
+            }, 1000);
+        }
+
+        function stopStream() {
+            const img = document.getElementById('stream');
+            img.src = '';
+            img.classList.add('hidden');
+            const ld = document.getElementById('loading');
+            ld.textContent = '画面已停止';
+            ld.classList.remove('hidden');
+            streaming = false;
+            if (fpsTimer) {
+                clearInterval(fpsTimer);
+                fpsTimer = null;
+            }
+            document.getElementById('fpsDisplay').textContent = 'FPS: --';
+        }
+
+        // ── Capture (still uses HTTP) ─────────────────────────────────────
+        function captureImage() {
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.onload = function() {
+                document.getElementById('previewImage').src = this.src;
+                document.getElementById('capturePreview').classList.remove('hidden');
+            };
+            img.onerror = () => alert('截图失败');
+            img.src = getMediaBaseUrl() + '/capture?' + Date.now();
+        }
+
+        function closePreview() {
+            document.getElementById('capturePreview').classList.add('hidden');
+        }
+
+        function downloadCapture() {
+            const img = document.getElementById('previewImage');
+            if (!img.src) return;
+            const a = document.createElement('a');
+            a.href = img.src;
+            a.download = 'capture_' + Date.now() + '.jpg';
+            a.click();
+        }
+
+        // ── Toast ─────────────────────────────────────────────────────────
+        let toastTimer = null;
+        function showToast(msg, isError) {
+            const el = document.getElementById('toast');
+            el.textContent = msg;
+            el.style.background = isError ? '#ef4444' : '#10b981';
+            el.classList.add('show');
+            if (toastTimer) clearTimeout(toastTimer);
+            toastTimer = setTimeout(() => el.classList.remove('show'), 1500);
+        }
+
+        // ── Toggle Switch ─────────────────────────────────────────────────
+        function toggleSwitch(el, name) {
+            el.classList.toggle('active');
+            wsSet(name, el.classList.contains('active') ? 1 : 0);
+        }
+
+        function setToggle(name, val) {
+            const el = document.getElementById(name + '_toggle');
+            if (val) el.classList.add('active');
+            else el.classList.remove('active');
+        }
+
+        // ── Actions ───────────────────────────────────────────────────────
+        function resetDefaults() {
+            if (!confirm('确定要恢复所有摄像头设置为默认值吗？')) return;
+            dirtyControls.clear();  // 清除脏标记，让默认值写入后状态更新能正常工作
+            ['pixformat:0','framesize:5','brightness:0','contrast:0','saturation:0','quality:10','awb:1','agc:1','aec:1','hmirror:0','vflip:1','special_effect:0','wb_mode:0'].forEach(s => {
+                const [k, v] = s.split(':');
+                wsSet(k, v);
+            });
+        }
+
+        function rebootDevice() {
+            if (!confirm('确定要重启设备吗？连接将暂时断开。')) return;
+            wsSend({cmd: 'restart'});
+        }
+
+        // ── Keyboard Shortcuts ────────────────────────────────────────────
+        document.addEventListener('keydown', function(e) {
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+            switch(e.key) {
+                case 's': if (!streaming) startStream(); break;
+                case 'x': if (streaming) stopStream(); break;
+                case 'c': captureImage(); break;
+                case 'Escape': closePreview(); break;
+            }
+        });
+
+        // ── Init ──────────────────────────────────────────────────────────
+        document.addEventListener('DOMContentLoaded', wsConnect);
+    </script>
+</body>
+</html>
