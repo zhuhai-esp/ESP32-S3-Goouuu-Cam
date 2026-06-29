@@ -7,6 +7,7 @@
  * 2. 初始化 GC2145 摄像头（RGB565 格式，QVGA 分辨率）
  * 3. 通过 WiFiManager 进行 WiFi 配网
  * 4. 启动摄像头 Web 服务器
+ * 5. 注册 mDNS 服务（支持 esp32cam.local 访问）
  * 
  * LED 状态指示：
  * - 红色：WiFi 配置中/出错
@@ -19,9 +20,11 @@
 #include <WiFiManager.h>
 #include <string.h>
 #include <stdlib.h>
+#include <ESPmDNS.h>
 
 #include "camera_pins.h"
 #include "esp_camera.h"
+#include "camera_httpd.h"  // gc2145_patch_sensor()
 
 // ── 硬件配置常量 ─────────────────────────────────────────────────────────────
 
@@ -63,7 +66,7 @@ static void startWifiConfig() {
   showPixelColor(0xFF0000);  // 红色：进入 WiFi 配置模式
   wm.setConfigPortalTimeout(180);  // 配网超时时间：180 秒
   wm.setConfigPortalTimeoutCallback([]() { ESP.restart(); });  // 超时重启
-  auto res = wm.autoConnect();  // 尝试自动连接已保存的 WiFi
+  auto res = wm.autoConnect("ESP32-CAM");  // 尝试自动连接已保存的 WiFi，AP 名称自定义
   if (!res) {
     ESP.restart();  // 连接失败则重启
   }
@@ -127,12 +130,15 @@ static void initCamera() {
     ESP.restart();  // 重启设备（与 demo 项目保持一致）
   }
   
-  // 获取传感器对象并配置默认参数
+  // 应用 GC2145 寄存器级补丁（替换驱动中的 set_dummy 函数）
+  // 必须在 esp_camera_init() 之后、任何传感器操作之前调用
+  gc2145_patch_sensor();
+
+  // 获取传感器对象并配置硬件默认参数
   sensor_t* s = esp_camera_sensor_get();
   if (s) {
     s->set_vflip(s, 1);       // 垂直翻转（根据摄像头安装方向调整）
-    s->set_brightness(s, 1);  // 亮度 +1（略微提高亮度）
-    s->set_saturation(s, 0);  // 饱和度 0（默认值）
+    // 亮度和饱和度默认为 0，由 ws_load_saved_settings() 从 NVS 加载用户设置
   } else {
     Serial.println("获取摄像头传感器失败");
   }
@@ -162,16 +168,18 @@ static void initPixels() {
  * 3. 初始化摄像头
  * 4. 进行 WiFi 配网
  * 5. 启动摄像头 Web 服务器
+ * 6. 注册 mDNS 服务（支持 esp32cam.local 访问）
  */
 void setup() {
   Serial.begin(115200);  // 初始化串口通信
   initPixels();          // 初始化 RGB LED
   initCamera();          // 初始化摄像头
   startWifiConfig();     // WiFi 配网
-  startCameraServer();   // 启动 Web 服务器
+  startCameraServer();   // 启动 Web 服务器（内含 mDNS 注册）
+
   Serial.print("摄像头就绪！请访问 'http://");
   Serial.print(WiFi.localIP());
-  Serial.println("' 连接设备");
+  Serial.println("' 或 'http://esp32cam.local' 连接设备");
 }
 
 /**

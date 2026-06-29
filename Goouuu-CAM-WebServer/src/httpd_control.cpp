@@ -8,6 +8,7 @@
  * 3. cmd_handler - HTTP 接口的摄像头参数设置
  * 4. build_status_json() - 构建摄像头状态 JSON
  * 5. status_handler - HTTP 接口的状态查询
+ * 6. GC2145 寄存器级图像调整补丁（亮度/对比度/饱和度/特效/AWB/AEC/AGC/质量）
  */
 
 #include "camera_httpd.h"
@@ -15,6 +16,168 @@
 #include "esp_log.h"
 
 static const char *TAG = "httpd_control";
+
+// ── GC2145 寄存器级控制 ─────────────────────────────────────────────────────
+// esp32-camera 库的 GC2145 驱动将大部分图像调整函数设为 set_dummy（返回 -1），
+// 本段代码通过直接操作 GC2145 SCCB 寄存器来实现这些功能。
+// 
+// GC2145 使用分页寄存器系统：寄存器 0xFE 选择页面（0x00~0x03）
+// 关键寄存器：
+//   Page 0: 0x82 (ISP 自动功能使能), 0x83 (特效), 0xb0 (全局增益), 0xb6 (AEC 使能)
+//   Page 2: 0xd1 (亮度), 0xd2 (对比度), 0xd3 (饱和度)
+
+#define GC2145_PID_VAL 0x2145
+
+// 辅助：设置 GC2145 寄存器页面
+static inline int gc2145_set_page(sensor_t *s, uint8_t page) {
+    return s->set_reg(s, 0xFE, 0xFF, page);
+}
+
+// GC2145 亮度设置（-2 到 2）
+// Page 2, Register 0xd1, 默认值 0x30
+static int gc2145_set_brightness(sensor_t *s, int level) {
+    if (level < -2 || level > 2) return -1;
+    static const uint8_t vals[] = {0x10, 0x20, 0x30, 0x40, 0x50};
+    gc2145_set_page(s, 0x02);
+    int ret = s->set_reg(s, 0xd1, 0xFF, vals[level + 2]);
+    if (ret >= 0) s->status.brightness = level;
+    return ret;
+}
+
+// GC2145 对比度设置（-2 到 2）
+// Page 2, Register 0xd2, 默认值 0x30
+static int gc2145_set_contrast(sensor_t *s, int level) {
+    if (level < -2 || level > 2) return -1;
+    static const uint8_t vals[] = {0x10, 0x20, 0x30, 0x40, 0x50};
+    gc2145_set_page(s, 0x02);
+    int ret = s->set_reg(s, 0xd2, 0xFF, vals[level + 2]);
+    if (ret >= 0) s->status.contrast = level;
+    return ret;
+}
+
+// GC2145 饱和度设置（-2 到 2）
+// Page 2, Register 0xd3, 默认值 0x45
+static int gc2145_set_saturation(sensor_t *s, int level) {
+    if (level < -2 || level > 2) return -1;
+    static const uint8_t vals[] = {0x20, 0x32, 0x45, 0x58, 0x6A};
+    gc2145_set_page(s, 0x02);
+    int ret = s->set_reg(s, 0xd3, 0xFF, vals[level + 2]);
+    if (ret >= 0) s->status.saturation = level;
+    return ret;
+}
+
+// GC2145 特殊效果设置（0-6）
+// Page 0, Register 0x83
+static int gc2145_set_special_effect(sensor_t *s, int effect) {
+    if (effect < 0 || effect > 6) return -1;
+    gc2145_set_page(s, 0x00);
+    int ret = s->set_reg(s, 0x83, 0xFF, effect);
+    if (ret >= 0) s->status.special_effect = effect;
+    return ret;
+}
+
+// GC2145 自动白平衡开关（0 或 1）
+// Page 0, Register 0x82, Bit 1 (AWB_en)
+static int gc2145_set_awb(sensor_t *s, int enable) {
+    gc2145_set_page(s, 0x00);
+    int ret = s->set_reg(s, 0x82, 0x02, enable ? 0x02 : 0x00);
+    if (ret >= 0) s->status.awb = enable ? 1 : 0;
+    return ret;
+}
+
+// GC2145 自动曝光控制开关（0 或 1）
+// Page 0, Register 0xb6, Bit 0 (AEC_en)
+// 注意：GC2145 的 AGC 与 AEC 共用同一控制位
+static int gc2145_set_aec(sensor_t *s, int enable) {
+    gc2145_set_page(s, 0x00);
+    int ret = s->set_reg(s, 0xb6, 0x01, enable ? 0x01 : 0x00);
+    if (ret >= 0) {
+        s->status.aec = enable ? 1 : 0;
+        // GC2145 中 AGC 与 AEC 绑定，同步状态
+        s->status.agc = s->status.aec;
+    }
+    return ret;
+}
+
+// GC2145 自动增益控制开关（0 或 1）
+// GC2145 的 AGC 与 AEC 共用同一控制位（0xb6 bit 0）
+// 此函数控制 AEC 位，并同步两个状态
+static int gc2145_set_agc(sensor_t *s, int enable) {
+    gc2145_set_page(s, 0x00);
+    int ret = s->set_reg(s, 0xb6, 0x01, enable ? 0x01 : 0x00);
+    if (ret >= 0) {
+        s->status.agc = enable ? 1 : 0;
+        s->status.aec = s->status.agc;  // 同步 AEC 状态
+    }
+    return ret;
+}
+
+// GC2145 JPEG 质量设置（4-63，值越小质量越高）
+// 这是软件 JPEG 编码参数，不是传感器寄存器
+// GC2145 输出 RGB565，由 frame2jpg() 软件编码为 JPEG
+static int gc2145_set_quality(sensor_t *s, int quality) {
+    if (quality < 4 || quality > 63) return -1;
+    s->status.quality = quality;
+    return 0;
+}
+
+// GC2145 白平衡模式设置（0-4）
+// 简化实现：0=自动（启用 AWB），1-4=手动（禁用 AWB）
+// GC2145 的 AWB 预设寄存器需要复杂数据表，此处仅实现自动/手动切换
+static int gc2145_set_wb_mode(sensor_t *s, int mode) {
+    if (mode < 0 || mode > 4) return -1;
+    gc2145_set_page(s, 0x00);
+    if (mode == 0) {
+        // 自动模式：启用 AWB
+        s->set_reg(s, 0x82, 0x02, 0x02);
+        s->status.awb = 1;
+    } else {
+        // 手动模式：禁用 AWB
+        s->set_reg(s, 0x82, 0x02, 0x00);
+        s->status.awb = 0;
+    }
+    s->status.wb_mode = mode;
+    return 0;
+}
+
+/**
+ * @brief 补丁 GC2145 传感器：替换 set_dummy 为寄存器级实现
+ * 
+ * esp32-camera 库的 GC2145 驱动将亮度、对比度、饱和度等函数设为 set_dummy，
+ * 本函数用寄存器级实现替换这些空函数，并修正 init_status 中的错误默认值。
+ * 
+ * 应在 esp_camera_init() 之后调用。
+ */
+void gc2145_patch_sensor() {
+    sensor_t *s = esp_camera_sensor_get();
+    if (!s || s->id.PID != GC2145_PID_VAL) return;
+
+    ESP_LOGI(TAG, "应用 GC2145 寄存器级补丁...");
+
+    // 替换 set_dummy 函数指针为寄存器级实现
+    s->set_brightness    = gc2145_set_brightness;
+    s->set_contrast      = gc2145_set_contrast;
+    s->set_saturation    = gc2145_set_saturation;
+    s->set_quality       = gc2145_set_quality;
+    s->set_special_effect = gc2145_set_special_effect;
+    s->set_whitebal      = gc2145_set_awb;
+    s->set_exposure_ctrl = gc2145_set_aec;
+    s->set_gain_ctrl     = gc2145_set_agc;
+    s->set_wb_mode       = gc2145_set_wb_mode;
+
+    // 修正 init_status 中的错误默认值
+    // GC2145 驱动的 init_status 将 awb/aec/agc 硬编码为 0，但实际硬件默认是开启的
+    gc2145_set_page(s, 0x00);
+    int reg82 = s->get_reg(s, 0x82, 0xFF);
+    int regb6 = s->get_reg(s, 0xb6, 0xFF);
+    s->status.awb = (reg82 & 0x02) ? 1 : 0;
+    s->status.aec = (regb6 & 0x01) ? 1 : 0;
+    s->status.agc = s->status.aec;  // AGC 与 AEC 绑定
+    s->status.quality = 12;  // 与 camera_config.jpeg_quality 一致
+
+    ESP_LOGI(TAG, "GC2145 补丁完成: awb=%d, aec=%d, agc=%d",
+             s->status.awb, s->status.aec, s->status.agc);
+}
 
 // 前向声明
 int apply_sensor_setting(const char *var, int val);
@@ -129,7 +292,10 @@ static int reinit_camera(int new_fs, int new_pf)
         }
     }
 
-    // 5. 恢复传感器参数
+    // 5. 应用 GC2145 寄存器级补丁（替换 set_dummy 为实际实现）
+    gc2145_patch_sensor();
+
+    // 6. 恢复传感器参数
     sensor_t *new_s = esp_camera_sensor_get();
     if (new_s && old_s) {
         for (int i = 0; i < 12; i++) {
@@ -137,26 +303,10 @@ static int reinit_camera(int new_fs, int new_pf)
         }
     }
 
-    // 6. 重启流媒体服务器（端口 81，处理 stream/capture/bmp）
+    // 7. 重启流媒体服务器（端口 81，处理 stream/capture）
     camera_reinit_active = false;
     ESP_LOGI(TAG, "重启流媒体服务器...");
-    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.server_port = 81;
-    config.ctrl_port = 32769;
-    config.max_uri_handlers = 4;
-    config.max_open_sockets = 4;
-    config.backlog_conn = 4;
-    config.lru_purge_enable = true;
-    config.stack_size = 8192;
-    if (httpd_start(&stream_httpd, &config) == ESP_OK) {
-        static const httpd_uri_t stream_uris[] = {
-            { .uri = "/stream",  .method = HTTP_GET, .handler = stream_handler,  .user_ctx = NULL },
-            { .uri = "/capture", .method = HTTP_GET, .handler = capture_handler, .user_ctx = NULL },
-        };
-        for (size_t i = 0; i < sizeof(stream_uris) / sizeof(stream_uris[0]); i++) {
-            httpd_register_uri_handler(stream_httpd, &stream_uris[i]);
-        }
-    }
+    start_stream_server();
 
     ESP_LOGI(TAG, "摄像头重新初始化成功 (fs=%d, pf=%d)", cam_cfg.frame_size, cam_cfg.pixel_format);
     return 0;

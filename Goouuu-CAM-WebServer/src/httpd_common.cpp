@@ -108,6 +108,43 @@ int parse_get_var(char *buf, const char *key, int def)
     return atoi(val);
 }
 
+// ── 流媒体服务器启动（端口 81）─────────────────────────────────────────────
+// 被 startCameraServer 和 reinit_camera 共用，避免配置/路由重复
+
+/**
+ * @brief 启动流媒体服务器
+ *
+ * 在端口 81 上启动独立的 HTTP 服务器，注册 /stream 和 /capture 路由。
+ * 被 startCameraServer（首次启动）和 reinit_camera（重新初始化后重启）共用。
+ *
+ * @return true 成功，false 失败
+ */
+bool start_stream_server()
+{
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    config.server_port = 81;
+    config.ctrl_port   = 32769;
+    config.max_uri_handlers = 4;
+    config.max_open_sockets = 4;
+    config.backlog_conn = 4;
+    config.lru_purge_enable = true;
+    config.stack_size = 8192;
+
+    if (httpd_start(&stream_httpd, &config) != ESP_OK) {
+        ESP_LOGE(TAG, "流媒体服务器启动失败");
+        return false;
+    }
+
+    static const httpd_uri_t stream_uris[] = {
+        { .uri = "/stream",  .method = HTTP_GET, .handler = stream_handler,  .user_ctx = NULL },
+        { .uri = "/capture", .method = HTTP_GET, .handler = capture_handler, .user_ctx = NULL },
+    };
+    for (size_t i = 0; i < sizeof(stream_uris) / sizeof(stream_uris[0]); i++) {
+        httpd_register_uri_handler(stream_httpd, &stream_uris[i]);
+    }
+    return true;
+}
+
 // ── JPEG 分块编码回调函数 ────────────────────────────────────────────────────
 
 /**

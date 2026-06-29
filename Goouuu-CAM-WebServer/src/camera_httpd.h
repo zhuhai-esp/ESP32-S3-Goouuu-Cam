@@ -74,11 +74,13 @@ size_t jpg_encode_stream(void *arg, size_t index, const void *data, size_t len);
 // 首页和服务器启动 (httpd_server.cpp)
 esp_err_t index_handler(httpd_req_t *req);   // 首页 HTML 服务
 void startCameraServer();                    // 启动摄像头 Web 服务器
+bool start_stream_server();                  // 启动流媒体服务器（端口 81），返回是否成功
 
 // WebSocket 通信 (httpd_ws.cpp)
 esp_err_t ws_handler(httpd_req_t *req);      // WebSocket 连接处理
 void ws_broadcast_status(httpd_handle_t hd); // 广播状态到所有客户端
 void ws_start_status_push(httpd_handle_t hd); // 启动定时状态推送
+void ws_load_saved_settings();               // 加载 NVS 中保存的设置
 
 // 图像捕获 (httpd_capture.cpp)
 esp_err_t capture_handler(httpd_req_t *req); // JPEG 图像捕获
@@ -92,6 +94,7 @@ esp_err_t cmd_handler(httpd_req_t *req);     // 摄像头参数设置
 esp_err_t status_handler(httpd_req_t *req);  // 摄像头状态查询
 int build_status_json(char *buf, size_t max_len);  // 构建状态 JSON
 int apply_sensor_setting(const char *var, int val); // 应用传感器设置
+void gc2145_patch_sensor();                        // GC2145 寄存器级补丁（替换 set_dummy）
 
 // 调试功能 (httpd_debug.cpp)
 esp_err_t xclk_handler(httpd_req_t *req);    // 外部时钟频率设置

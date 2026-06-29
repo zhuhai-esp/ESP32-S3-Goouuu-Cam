@@ -15,6 +15,7 @@
 #include "camera_httpd.h"
 #include "esp_log.h"
 #include <WiFi.h>
+#include <ESPmDNS.h>
 
 static const char *TAG = "httpd_server";
 
@@ -101,8 +102,7 @@ static esp_err_t wifi_handler(httpd_req_t *req)
  * - / : 首页
  * - /control : 摄像头参数设置
  * - /status : 摄像头状态查询
- * - /capture : JPEG 图像捕获
- * - /bmp : BMP 图像捕获
+ * - /capture : JPEG 图像捕获（端口 81）
  * - /xclk : 外部时钟频率设置
  * - /reg : 寄存器写入
  * - /greg : 寄存器读取
@@ -113,8 +113,8 @@ static esp_err_t wifi_handler(httpd_req_t *req)
  * - /ws : WebSocket 通信
  * - /stream : MJPEG 视频流（端口 81）
  */
-void startCameraServer()
-{
+void startCameraServer() {
+    Serial.println("启动摄像头 Web 服务器...");
     // 初始化帧率滤波器（20 个采样点）
     ra_filter_init(&ra_filter, 20);
 
@@ -151,8 +151,9 @@ void startCameraServer()
         .is_websocket = true  // 标记为 WebSocket 端点
     };
 
-    ESP_LOGI(TAG, "启动 Web 服务器，端口: '%d'", config.server_port);
-    if (httpd_start(&camera_httpd, &config) == ESP_OK) {
+    ESP_LOGI(TAG, "启动 Web 服务器，端口: %d, ctrl_port: %d", config.server_port, config.ctrl_port);
+    esp_err_t ret = httpd_start(&camera_httpd, &config);
+    if (ret == ESP_OK) {
         // 注册所有 HTTP 路由
         for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
             httpd_register_uri_handler(camera_httpd, &uris[i]);
@@ -163,26 +164,28 @@ void startCameraServer()
 
         // 启动定时状态推送到 WebSocket 客户端
         ws_start_status_push(camera_httpd);
+    } else {
+        ESP_LOGE(TAG, "控制服务器启动失败: %d", ret);
     }
 
-    // ── 流媒体服务器配置（端口 81）──────────────────────────────────────────
+    // ── 流媒体服务器（端口 81）──────────────────────────────────────────────
     // 流媒体服务器处理所有涉及摄像头帧的请求（可能阻塞）
-    // 独立服务器确保 capture/bmp/stream 不会阻塞控制面板
+    // 独立服务器确保 capture/stream 不会阻塞控制面板
+    start_stream_server();
 
-    config.server_port += 1;            // 端口 81
-    config.ctrl_port   += 1;
-    config.max_uri_handlers = 4;        // 只需少量处理器
-    config.max_open_sockets = 4;        // 流媒体连接数限制
-    config.backlog_conn = 4;
-    config.lru_purge_enable = true;
-    ESP_LOGI(TAG, "启动流媒体服务器，端口: '%d'", config.server_port);
-    if (httpd_start(&stream_httpd, &config) == ESP_OK) {
-        static const httpd_uri_t stream_uris[] = {
-            { .uri = "/stream",  .method = HTTP_GET, .handler = stream_handler,  .user_ctx = NULL },
-            { .uri = "/capture", .method = HTTP_GET, .handler = capture_handler, .user_ctx = NULL },
-        };
-        for (size_t i = 0; i < sizeof(stream_uris) / sizeof(stream_uris[0]); i++) {
-            httpd_register_uri_handler(stream_httpd, &stream_uris[i]);
+    // 加载 NVS 中保存的摄像头设置（必须在 start_stream_server 之后，
+    // 因为 framesize/pixformat 变更会触发 reinit_camera 重建流媒体服务器）
+    ws_load_saved_settings();
+
+    // 注册 mDNS 主机名，支持 esp32cam.local 访问
+    // 使用 Arduino MDNS API（正确处理 ESP32-S3 内部初始化），带重试
+    for (int i = 0; i < 5; i++) {
+        if (MDNS.begin("esp32cam")) {
+            MDNS.addService("http", "tcp", 80);
+            ESP_LOGI(TAG, "mDNS 已注册: esp32cam.local (尝试 %d/5)", i + 1);
+            break;
         }
+        ESP_LOGW(TAG, "mDNS 注册失败 (尝试 %d/5)，等待重试...", i + 1);
+        delay(500);
     }
 }

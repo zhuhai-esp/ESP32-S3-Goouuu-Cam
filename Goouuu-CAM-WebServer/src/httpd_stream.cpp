@@ -42,9 +42,8 @@ esp_err_t stream_handler(httpd_req_t *req)
     uint8_t *jpg_buf = NULL;
     char part_buf[128];
 
-    // 记录第一帧时间（用于计算帧间隔）
-    static int64_t last_frame = 0;
-    if (!last_frame) last_frame = esp_timer_get_time();
+    // 每连接独立记录帧时间（原 static 变量在多客户端间共享导致帧率计算错误）
+    int64_t last_frame = esp_timer_get_time();
 
     // 设置响应类型为 MJPEG 流
     res = httpd_resp_set_type(req, STREAM_CONTENT_TYPE);
@@ -52,7 +51,6 @@ esp_err_t stream_handler(httpd_req_t *req)
 
     // 设置响应头
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-    httpd_resp_set_hdr(req, "X-Framerate", "60");
 
     // 主循环：持续获取并发送帧
     while (true) {
@@ -65,45 +63,42 @@ esp_err_t stream_handler(httpd_req_t *req)
         // 获取摄像头帧缓冲
         fb = esp_camera_fb_get();
         if (!fb) {
-            ESP_LOGE(TAG, "摄像头捕获失败");
-            res = ESP_FAIL;
-        } else {
-            // 记录时间戳
-            timestamp.tv_sec  = fb->timestamp.tv_sec;
-            timestamp.tv_usec = fb->timestamp.tv_usec;
+            ESP_LOGE(TAG, "摄像头捕获失败，跳过该帧");
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;  // 跳过坏帧，不终止流
+        }
 
-            // 如果原始格式不是 JPEG，需要转换
-            if (fb->format != PIXFORMAT_JPEG) {
-                bool converted = frame2jpg(fb, 80, &jpg_buf, &jpg_buf_len);
-                esp_camera_fb_return(fb);  // 释放原始帧缓冲
-                fb = NULL;
-                if (!converted) {
-                    ESP_LOGE(TAG, "JPEG 压缩失败");
-                    // 确保释放可能已分配的 jpg_buf
-                    if (jpg_buf) {
-                        free(jpg_buf);
-                        jpg_buf = NULL;
-                    }
-                    res = ESP_FAIL;
+        // 记录时间戳
+        timestamp.tv_sec  = fb->timestamp.tv_sec;
+        timestamp.tv_usec = fb->timestamp.tv_usec;
+
+        // 如果原始格式不是 JPEG，需要转换
+        if (fb->format != PIXFORMAT_JPEG) {
+            bool converted = frame2jpg(fb, 80, &jpg_buf, &jpg_buf_len);
+            esp_camera_fb_return(fb);  // 释放原始帧缓冲
+            fb = NULL;
+            if (!converted) {
+                ESP_LOGE(TAG, "JPEG 压缩失败，跳过该帧");
+                if (jpg_buf) {
+                    free(jpg_buf);
+                    jpg_buf = NULL;
                 }
-            } else {
-                // 原始格式就是 JPEG，直接使用
-                jpg_buf_len = fb->len;
-                jpg_buf = fb->buf;
+                continue;  // 跳过坏帧，不终止流
             }
+        } else {
+            // 原始格式就是 JPEG，直接使用
+            jpg_buf_len = fb->len;
+            jpg_buf = fb->buf;
         }
 
         // 发送帧边界
-        if (res == ESP_OK)
-            res = httpd_resp_send_chunk(req, STREAM_BOUNDARY, strlen(STREAM_BOUNDARY));
-        
+        res = httpd_resp_send_chunk(req, STREAM_BOUNDARY, strlen(STREAM_BOUNDARY));
         // 发送帧头（包含内容类型、长度和时间戳）
         if (res == ESP_OK) {
             size_t hlen = snprintf(part_buf, sizeof(part_buf), STREAM_PART,
                                    jpg_buf_len, timestamp.tv_sec, timestamp.tv_usec);
             res = httpd_resp_send_chunk(req, part_buf, hlen);
         }
-        
         // 发送 JPEG 数据
         if (res == ESP_OK)
             res = httpd_resp_send_chunk(req, (const char *)jpg_buf, jpg_buf_len);
@@ -118,9 +113,9 @@ esp_err_t stream_handler(httpd_req_t *req)
             jpg_buf = NULL;
         }
 
-        // 检查发送结果
+        // 仅在发送失败（客户端断开等）时终止流
         if (res != ESP_OK) {
-            ESP_LOGE(TAG, "发送帧失败");
+            ESP_LOGE(TAG, "发送帧失败，流终止");
             break;
         }
 
@@ -130,10 +125,10 @@ esp_err_t stream_handler(httpd_req_t *req)
         int avg_frame_time = ra_filter_run(&ra_filter, frame_time);  // 平均帧间隔
         last_frame = fr_end;
 
-        // 输出帧率日志（防止除零错误）
+        // 帧率日志：DEBUG 级别，避免每帧输出影响性能
         float fps = (frame_time > 0) ? (1000.0f / frame_time) : 0.0f;
         float avg_fps = (avg_frame_time > 0) ? (1000.0f / avg_frame_time) : 0.0f;
-        ESP_LOGI(TAG, "MJPG: %uB %ums (%.1ffps), 平均: %ums (%.1ffps)",
+        ESP_LOGD(TAG, "MJPG: %uB %ums (%.1ffps), 平均: %ums (%.1ffps)",
                  (uint32_t)jpg_buf_len,
                  (uint32_t)frame_time, fps,
                  (uint32_t)avg_frame_time, avg_fps);

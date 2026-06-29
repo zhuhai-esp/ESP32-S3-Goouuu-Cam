@@ -42,6 +42,7 @@
         <div class="bg-gradient-to-r from-sky-400 to-cyan-300 text-white py-4 px-4 md:py-5 md:px-6 text-center">
             <h1 class="text-xl md:text-3xl font-bold">ESP32-S3 摄像头控制面板</h1>
             <p class="text-xs md:text-sm opacity-90 mt-1">实时画面 &amp; WebSocket 控制</p>
+            <p id="mdnsHint" class="text-[10px] md:text-xs opacity-75 mt-1"></p>
         </div>
 
         <!-- Main Content -->
@@ -167,7 +168,7 @@
                 <div class="bg-gray-50 rounded-xl p-3 md:p-4 border border-gray-200">
                     <h3 class="text-sm font-bold text-gray-700 pb-2 mb-3 border-b-2 border-indigo-500">高级设置</h3>
 
-                    <label class="block text-xs text-gray-500 font-medium mb-1">白平衡</label>
+                    <label class="block text-xs text-gray-500 font-medium mb-1">白平衡 <span id="wbModeNote" class="text-gray-400 text-[10px]"></span></label>
                     <select id="wb_mode" onchange="wsSet('wb_mode', this.value)"
                         class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300 mb-3">
                         <option value="0">自动</option>
@@ -214,6 +215,7 @@
                                 <div class="toggle-thumb"></div>
                             </div>
                         </div>
+                        <p id="aecAgcNote" class="text-[10px] text-gray-400 mt-1 hidden">提示: GC2145 的自动曝光与自动增益共用同一控制位</p>
                         <div class="flex items-center justify-between">
                             <span class="text-sm text-gray-600">自动白平衡</span>
                             <div class="toggle-track active" id="awb_toggle" onclick="toggleSwitch(this, 'awb')">
@@ -456,8 +458,16 @@
                     } else {
                         showToast('设置失败: ' + (msg.var || ''), true);
                     }
-                    // 无论成功失败都保持脏标记，防止状态更新覆盖用户选择的值
-                    // 用户可通过"刷新状态"按钮主动获取传感器实际值
+                    // 清除脏标记，让下一次状态推送能同步控件为传感器实际值
+                    if (msg.var) dirtyControls.delete(msg.var);
+                    // 主动请求一次状态更新，立即同步 UI
+                    wsSend({cmd: 'get_status'});
+                    // 分辨率/像素格式变更会触发摄像头重新初始化，需要重启视频流
+                    if (msg.ok && (msg.var === 'framesize' || msg.var === 'pixformat') && streaming) {
+                        showToast('摄像头重新初始化中，重启视频流...');
+                        stopStream();
+                        setTimeout(() => startStream(), 2000);
+                    }
                     break;
                 case 'restarting':
                     updateWsStatus(false);
@@ -469,11 +479,25 @@
         }
 
         // ── Device Info Update ────────────────────────────────────────────
+        let isGC2145 = false;  // GC2145 传感器标志
+
         function updateDeviceInfo(d) {
             document.getElementById('sensorType').textContent = sensorName(d.PID);
             document.getElementById('xclkFreq').textContent = d.xclk + ' MHz';
             document.getElementById('pixFormat').textContent = pixFmt(d.pixformat);
             document.getElementById('frameSize').textContent = frameSz(d.framesize);
+
+            // 检测 GC2145 传感器，启用/禁用特定控件
+            isGC2145 = (d.PID === 0x2145 || d.PID === 0x40DC);
+            const wbModeNote = document.getElementById('wbModeNote');
+            const aecAgcNote = document.getElementById('aecAgcNote');
+            if (isGC2145) {
+                wbModeNote.textContent = '(仅支持自动/手动切换)';
+                aecAgcNote.classList.remove('hidden');
+            } else {
+                wbModeNote.textContent = '';
+                aecAgcNote.classList.add('hidden');
+            }
 
             // 只更新未被用户修改的控件
             if (!dirtyControls.has('quality')) {
@@ -615,16 +639,42 @@
             document.getElementById('fpsDisplay').textContent = 'FPS: --';
         }
 
-        // ── Capture (still uses HTTP) ─────────────────────────────────────
+        // ── Capture (uses fetch with loading state) ──────────────────────
+        let captureInProgress = false;
         function captureImage() {
-            const img = new Image();
-            img.crossOrigin = 'anonymous';
-            img.onload = function() {
-                document.getElementById('previewImage').src = this.src;
-                document.getElementById('capturePreview').classList.remove('hidden');
-            };
-            img.onerror = () => alert('截图失败');
-            img.src = getMediaBaseUrl() + '/capture?' + Date.now();
+            if (captureInProgress) return;
+            captureInProgress = true;
+            showToast('正在截图...');
+
+            // 超时保护（10秒）
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+            fetch(getMediaBaseUrl() + '/capture?' + Date.now(), { signal: controller.signal })
+                .then(response => {
+                    if (!response.ok) throw new Error('HTTP ' + response.status);
+                    return response.blob();
+                })
+                .then(blob => {
+                    clearTimeout(timeoutId);
+                    const url = URL.createObjectURL(blob);
+                    const preview = document.getElementById('previewImage');
+                    // 释放之前的 blob URL 避免内存泄漏
+                    if (preview.src.startsWith('blob:')) URL.revokeObjectURL(preview.src);
+                    preview.src = url;
+                    document.getElementById('capturePreview').classList.remove('hidden');
+                })
+                .catch(err => {
+                    clearTimeout(timeoutId);
+                    if (err.name === 'AbortError') {
+                        showToast('截图超时，请重试', true);
+                    } else {
+                        showToast('截图失败: ' + err.message, true);
+                    }
+                })
+                .finally(() => {
+                    captureInProgress = false;
+                });
         }
 
         function closePreview() {
@@ -635,9 +685,12 @@
             const img = document.getElementById('previewImage');
             if (!img.src) return;
             const a = document.createElement('a');
+            // 如果是 blob URL 直接使用，否则用 src
             a.href = img.src;
             a.download = 'capture_' + Date.now() + '.jpg';
+            document.body.appendChild(a);
             a.click();
+            document.body.removeChild(a);
         }
 
         // ── Toast ─────────────────────────────────────────────────────────
@@ -655,6 +708,16 @@
         function toggleSwitch(el, name) {
             el.classList.toggle('active');
             wsSet(name, el.classList.contains('active') ? 1 : 0);
+            // GC2145: AEC 与 AGC 共用同一控制位，同步另一个开关
+            if (name === 'aec' || name === 'agc') {
+                const other = name === 'aec' ? 'agc' : 'aec';
+                const otherEl = document.getElementById(other + '_toggle');
+                if (otherEl) {
+                    if (el.classList.contains('active')) otherEl.classList.add('active');
+                    else otherEl.classList.remove('active');
+                    dirtyControls.add(other);  // 防止状态推送覆盖
+                }
+            }
         }
 
         function setToggle(name, val) {
@@ -690,7 +753,17 @@
         });
 
         // ── Init ──────────────────────────────────────────────────────────
-        document.addEventListener('DOMContentLoaded', wsConnect);
+        document.addEventListener('DOMContentLoaded', function() {
+            wsConnect();
+            // 检测 mDNS 可用性
+            const hostname = window.location.hostname.toLowerCase();
+            const hint = document.getElementById('mdnsHint');
+            if (hostname === 'esp32cam.local' || hostname.endsWith('.local')) {
+                hint.textContent = '✅ 已通过 mDNS 域名访问';
+            } else if (hostname.endsWith('.local') === false) {
+                hint.textContent = '💡 提示: 也可通过 http://esp32cam.local 访问（需路由器支持 mDNS）';
+            }
+        });
     </script>
 </body>
 </html>

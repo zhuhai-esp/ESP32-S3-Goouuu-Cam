@@ -254,11 +254,15 @@ static void ws_handle_message(httpd_req_t *req, const char *msg)
             int res = apply_sensor_setting(var_name, val);
             ESP_LOGI(TAG, "设置结果: %s = %d -> res=%d", var_name, val, res);
 
-            // 保存设置到 NVS（无论成功失败都保存，这样重启后也能恢复）
-            preferences.begin("camera", false);
-            preferences.putInt(var_name, val);
-            preferences.end();
-            ESP_LOGI(TAG, "设置已保存到 NVS: %s = %d", var_name, val);
+            // 仅在设置成功时保存到 NVS（避免失败设置被持久化）
+            if (res >= 0) {
+                preferences.begin("camera", false);
+                preferences.putInt(var_name, val);
+                preferences.end();
+                ESP_LOGI(TAG, "设置已保存到 NVS: %s = %d", var_name, val);
+            } else {
+                ESP_LOGW(TAG, "设置失败，不保存到 NVS: %s = %d", var_name, val);
+            }
 
             // 获取传感器设置后的值（调试用）
             if (s) {
@@ -301,7 +305,7 @@ static void ws_handle_message(httpd_req_t *req, const char *msg)
             // 构造 WiFi 响应
             char *ws_msg = (char *)malloc(512);
             if (ws_msg) {
-                snprintf(ws_msg, 512, "{\"type\":\"wifi\",{%.*s}}", wlen, wifi_buf);
+                snprintf(ws_msg, 512, "{\"type\":\"wifi\",%.*s}", wlen, wifi_buf);
                 ws_send_text(req, ws_msg);
                 free(ws_msg);
             }
@@ -470,8 +474,10 @@ void ws_broadcast_status(httpd_handle_t hd)
  * @brief 加载保存的摄像头设置
  * 
  * 从 NVS 中读取之前保存的设置，并应用到摄像头传感器。
+ * 必须在 start_stream_server() 之后调用，因为 framesize/pixformat 
+ * 变更会触发 reinit_camera() 重建流媒体服务器。
  */
-static void load_saved_settings()
+void ws_load_saved_settings()
 {
     preferences.begin("camera", true);  // 只读模式
 
@@ -533,8 +539,7 @@ void ws_start_status_push(httpd_handle_t hd)
     // 初始化客户端表（所有槽位设为 -1 表示空闲）
     for (int i = 0; i < WS_MAX_CLIENTS; i++) ws_fds[i] = -1;
 
-    // 加载保存的设置
-    load_saved_settings();
+    // 加载保存的设置已移至 startCameraServer() 中 start_stream_server() 之后调用
 
     // 创建定时器
     esp_timer_create_args_t timer_args = {
